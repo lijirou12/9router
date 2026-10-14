@@ -151,6 +151,7 @@ export function stableSessionId(credentials) {
     existing.lastUsed = Date.now();
     stableOpencodeSessions.delete(key);
     stableOpencodeSessions.set(key, existing);
+    latestGeneratedSession = { sessionId: existing.sessionId, lastUsed: existing.lastUsed };
     return existing.sessionId;
   }
   const sessionId = generateSessionId();
@@ -164,6 +165,14 @@ export function stableSessionId(credentials) {
 
 export function getLatestGeneratedSession() {
   return latestGeneratedSession?.sessionId || null;
+}
+
+export function refreshGeneratedSession(timestamp = Date.now()) {
+  const sessionId = generateSessionId(timestamp);
+  latestGeneratedSession = { sessionId, lastUsed: Date.now() };
+  stableOpencodeSessions.clear();
+  stableOpencodeSessions.set("opencode:default", { sessionId, lastUsed: Date.now() });
+  return sessionId;
 }
 
 function lastUserText(body) {
@@ -288,6 +297,14 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
     const sessionId = translateSessionId(hinted, clientTool);
     latestGeneratedSession = { sessionId, lastUsed: Date.now() };
     return sessionId;
+  }
+
+  if (latestGeneratedSession?.sessionId) {
+    const key = identityKey(credentials);
+    const now = Date.now();
+    latestGeneratedSession.lastUsed = now;
+    stableOpencodeSessions.set(key, { sessionId: latestGeneratedSession.sessionId, lastUsed: now });
+    return latestGeneratedSession.sessionId;
   }
 
   if (credentials?.connectionId || bodyHasSessionHints(body)) {
@@ -465,8 +482,10 @@ export class OpenCodeExecutor extends BaseExecutor {
   }
 
   finalizeRequestHeaders(headers, credentials) {
-    // This value is algorithmically generated and stable for the downstream
-    // identity. Never let a static user header replace it.
+    // A valid user-supplied x-opencode-session is authoritative. Otherwise
+    // preserve the resolved/generated session from this request.
+    const suppliedSession = nativeSession(headers);
+    if (suppliedSession) return;
     for (const name of Object.keys(headers)) {
       if (name.toLowerCase() === SESSION_HEADER) delete headers[name];
     }

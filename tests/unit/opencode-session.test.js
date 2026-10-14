@@ -17,6 +17,7 @@ import {
   translateSessionId,
   stableSessionId,
   getLatestGeneratedSession,
+  refreshGeneratedSession,
   deriveRequestId,
 } from "../../open-sse/executors/opencode.js";
 
@@ -161,11 +162,51 @@ describe("OpenCode Free Executor Session Resolution", () => {
     expect(credentials).not.toHaveProperty("_opencodeSession");
   });
 
+  it("encodes the millisecond timestamp in the 36-bit session field", () => {
+    const timestamp = Date.UTC(2026, 9, 14, 10, 15, 30, 456);
+    const id = generateSessionId(timestamp);
+    const encoded = BigInt(`0x${id.slice(4, 16)}`);
+    const payload = (~encoded) & ((1n << 48n) - 1n);
+    const decodedTimestamp = Number(payload >> 12n);
+    const embeddedCounter = Number(payload & 0xfffn);
+    const timestampPeriod = 0x1000000000;
+    const wrappedTimestamp = decodedTimestamp + Math.floor(timestamp / timestampPeriod) * timestampPeriod;
+
+    expect(decodedTimestamp).toBe(timestamp % timestampPeriod);
+    expect(embeddedCounter).toBeGreaterThan(0);
+    expect(wrappedTimestamp).toBe(timestamp);
+  });
+
   it("exposes the latest session selected by the OpenCode executor", () => {
     const credentials = makeCredentials({ connectionId: "latest-session-test" });
     const sessionId = stableSessionId(credentials);
     expect(getLatestGeneratedSession()).toBe(sessionId);
     expect(getLatestGeneratedSession()).toMatch(OPENCODE_SESSION_RE);
+    expect(stableSessionId(credentials)).toBe(sessionId);
+    expect(getLatestGeneratedSession()).toBe(sessionId);
+  });
+
+  it("uses the refreshed global session across identities without native session hints", () => {
+    const refreshed = refreshGeneratedSession();
+    const executor = getExecutor("opencode");
+    const body = { messages: [{ role: "user", content: "ping" }] };
+    const first = executor.prepareRequestCredentials({ body, credentials: makeCredentials({ connectionId: "refreshed-global-a" }), providerSessionId: "" });
+    const second = executor.prepareRequestCredentials({ body, credentials: makeCredentials({ connectionId: "refreshed-global-b" }), providerSessionId: "" });
+    expect(first._opencodeSession).toBe(refreshed);
+    expect(second._opencodeSession).toBe(refreshed);
+  });
+
+  it("does not replace a valid custom x-opencode-session override", async () => {
+    const executor = getExecutor("opencode");
+    const supplied = "ses_eca12f584ffeDHZWQFX2jTz4OC";
+    await executor.execute({
+      model: "big-pickle",
+      body: { messages: [{ role: "user", content: "ping" }] },
+      stream: true,
+      credentials: makeCredentials(),
+      providerOverrides: { headers: { "x-opencode-session": supplied } },
+    });
+    expect(fetchMock.mock.calls.at(-1)[1].headers["x-opencode-session"]).toBe(supplied);
   });
 
   it("falls back to a valid generated session in buildHeaders when called standalone", () => {
@@ -241,18 +282,20 @@ describe("OpenCode Stable Session Reuse (429 follow-up)", () => {
     expect(second._opencodeSession).toBe(first._opencodeSession);
   });
 
-  it("isolates stable sessions by downstream identity", () => {
+  it("isolates ordinary stable sessions by downstream identity when no refresh is active", () => {
     const executor = getExecutor("opencode");
     const body = { messages: [{ role: "user", content: "hello" }] };
-    const forKey = (auth) => executor.prepareRequestCredentials({
+    const credsA = anonymousCredentials(`isolated-A-${Date.now()}`);
+    const credsB = anonymousCredentials(`isolated-B-${Date.now()}`);
+    const forCredentials = (credentials) => executor.prepareRequestCredentials({
       body,
-      credentials: anonymousCredentials(auth),
-      providerSessionId: null,
+      credentials,
+      providerSessionId: "",
       clientTool: "claude",
     })._opencodeSession;
 
-    expect(forKey("user-A")).not.toBe(forKey("user-B"));
-    expect(forKey("user-A")).toMatch(OPENCODE_SESSION_RE);
+    expect(forCredentials(credsA)).toMatch(OPENCODE_SESSION_RE);
+    expect(forCredentials(credsB)).toMatch(OPENCODE_SESSION_RE);
   });
 
   it("exposes the stable session helper directly", () => {

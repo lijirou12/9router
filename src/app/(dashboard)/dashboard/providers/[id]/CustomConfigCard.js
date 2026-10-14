@@ -39,6 +39,20 @@ export default function CustomConfigCard({ providerId }) {
     setLoaded(true);
   }, [providerId]);
 
+  const refreshDynamicHeader = useCallback(async (name) => {
+    const res = await fetch(`/api/providers/${providerId}/overrides`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.sessionId) {
+      notify.error(data.error || "Failed to refresh session");
+      return;
+    }
+    setDynamicHeaders((previous) => ({
+      ...previous,
+      [name]: { value: data.sessionId, description: "New session generated and active for OpenCode Free" },
+    }));
+    notify.success("OpenCode session refreshed");
+  }, [providerId, notify]);
+
   const setRow = (i, field, value) => {
     setRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
   };
@@ -131,7 +145,7 @@ export default function CustomConfigCard({ providerId }) {
                 <button
                   type="button"
                   title="Refresh generated session value"
-                  onClick={() => loadHeaders().catch(() => {})}
+                  onClick={() => refreshDynamicHeader(name).catch(() => {})}
                   className="shrink-0 rounded-md border border-border px-2 py-1.5 text-xs hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
                 >
                   Refresh

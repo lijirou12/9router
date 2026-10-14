@@ -21,6 +21,7 @@ import {
   KIMCHI_CONFIG,
 } from "@/lib/oauth/constants/oauth";
 import { buildClineHeaders } from "@/shared/utils/clineAuth";
+import { refreshGeneratedSession, getLatestGeneratedSession } from "open-sse/executors/opencode.js";
 
 // OAuth provider test endpoints
 const OAUTH_TEST_CONFIG = {
@@ -797,10 +798,56 @@ async function testApiKeyConnection(connection, effectiveProxy = null) {
         return { valid, error: valid ? null : "Session expired — re-paste cookie" };
       }
       case "opencode": {
-        const res = await fetchWithConnectionProxy("https://opencode.ai/zen/v1/models", {
-          headers: { Authorization: "Bearer public", "User-Agent": "opencode/1.18.31", "x-opencode-client": "desktop" },
+        const session = getLatestGeneratedSession() || refreshGeneratedSession();
+        const requestTimestamp = Date.now();
+        const requestCurrent = BigInt(requestTimestamp) * 0x1000n + 1n;
+        const requestHex = Array.from({ length: 6 }, (_, index) =>
+          Number((requestCurrent >> BigInt(40 - 8 * index)) & 0xffn).toString(16).padStart(2, "0")
+        ).join("");
+        const requestRandom = Array.from(
+          globalThis.crypto.getRandomValues(new Uint8Array(14)),
+          (byte) => "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"[byte % 62],
+        ).join("");
+        const requestId = `msg_${requestHex}${requestRandom}`;
+        const tools = ["bash", "read"].map((name) => ({
+          type: "function",
+          function: { name, parameters: {} },
+        }));
+        const res = await fetchWithConnectionProxy("https://opencode.ai/inference/openai/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer public",
+            "User-Agent": "opencode/1.19.0",
+            "x-opencode-client": "desktop",
+            "x-opencode-session": session,
+            "x-opencode-request": requestId,
+            "x-opencode-project": "global",
+            Accept: "text/event-stream",
+          },
+          body: JSON.stringify({
+            model: "space-bunny-free",
+            messages: [{ role: "user", content: "Reply with exactly pong and nothing else." }],
+            stream: true,
+            tools,
+            tool_choice: "none",
+          }),
         }, effectiveProxy);
-        return { valid: res.ok, error: res.ok ? null : `OpenCode Free unavailable (HTTP ${res.status})` };
+        if (!res.ok) {
+          const detail = await res.text().catch(() => "");
+          return { valid: false, error: `OpenCode Free chat test failed (HTTP ${res.status}): ${detail.slice(0, 500)}` };
+        }
+        const raw = await res.text();
+        const content = raw.split(/\r?\n/)
+          .filter((line) => line.startsWith("data: ") && !line.includes("[DONE]"))
+          .map((line) => {
+            try { return JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || ""; }
+            catch { return ""; }
+          })
+          .join("")
+          .trim();
+        const valid = content.toLowerCase() === "pong";
+        return { valid, error: valid ? null : `OpenCode Free returned unexpected response: ${content.slice(0, 160) || "<empty>"}` };
       }
       case "opencode-go": {
         const res = await fetchWithConnectionProxy("https://opencode.ai/zen/go/v1/chat/completions", {

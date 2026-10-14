@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderAlias } from "open-sse/services/model.js";
-import { getLatestGeneratedSession } from "open-sse/executors/opencode.js";
+import { getLatestGeneratedSession, refreshGeneratedSession } from "open-sse/executors/opencode.js";
 
 export const dynamic = "force-dynamic";
 
@@ -152,5 +152,17 @@ export async function PUT(request, { params }) {
   } catch (error) {
     console.log("Error saving provider overrides:", error);
     return NextResponse.json({ error: "Failed to save overrides" }, { status: 500 });
+  }
+}
+
+export async function POST(request, { params }) {
+  try {
+    const { id } = await params;
+    const canonical = resolveProviderAlias(id);
+    if (canonical !== "opencode") return NextResponse.json({ error: "Session refresh is only supported for OpenCode Free" }, { status: 404 });
+    return NextResponse.json({ sessionId: refreshGeneratedSession() });
+  } catch (error) {
+    console.log("Error refreshing OpenCode session:", error);
+    return NextResponse.json({ error: "Failed to refresh OpenCode session" }, { status: 500 });
   }
 }
