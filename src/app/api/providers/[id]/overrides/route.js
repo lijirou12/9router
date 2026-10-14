@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { PROVIDERS } from "open-sse/config/providers.js";
 import { resolveProviderAlias } from "open-sse/services/model.js";
+import { getLatestGeneratedSession } from "open-sse/executors/opencode.js";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,14 @@ const BLOCKED_HEADERS = new Set([
   "transfer-encoding",
   "authorization",
   "cookie",
+  // Generated per request by the OpenCode executor; a saved static override
+  // would break session reuse and free-tier fingerprinting.
+  "x-opencode-session",
 ]);
+
+function containsHeader(headers, target) {
+  return headers && typeof headers === "object" && Object.keys(headers).some((name) => name.toLowerCase() === target);
+}
 
 /**
  * Validate + normalize an override payload. Returns { override } or { error }.
@@ -71,12 +79,37 @@ export async function GET(request, { params }) {
     const { id } = await params;
     // URL may use an alias (gcli, cc…) — key everything by canonical registry id
     const canonical = resolveProviderAlias(id);
-    const override = (await readOverrides())[canonical] || {};
+    const allOverrides = await readOverrides();
+    const override = allOverrides[canonical] || {};
+    const overrideHeaders = { ...(override.headers || {}) };
+    // Older versions allowed a static session override. Remove it from the
+    // effective configuration so the generated per-request value always wins.
+    if (canonical === "opencode") {
+      let removed = false;
+      for (const name of Object.keys(overrideHeaders)) {
+        if (name.toLowerCase() === "x-opencode-session") {
+          delete overrideHeaders[name];
+          removed = true;
+        }
+      }
+      if (removed) {
+        const next = { ...allOverrides };
+        if (Object.keys(overrideHeaders).length) next[canonical] = { ...override, headers: overrideHeaders };
+        else delete next[canonical];
+        await updateSettings({ providerOverrides: next });
+      }
+    }
     // Built-in headers come straight from the registry transport — single source of
     // truth, so the UI pre-fills exactly what this provider sends upstream.
     return NextResponse.json({
-      headers: override.headers || {},
+      headers: overrideHeaders,
       builtinHeaders: PROVIDERS[canonical]?.headers || {},
+      dynamicHeaders: canonical === "opencode" ? {
+        "x-opencode-session": {
+          value: getLatestGeneratedSession(),
+          description: "Latest x-opencode-session used upstream by OpenCode Free",
+        },
+      } : {},
     });
   } catch (error) {
     console.log("Error getting provider overrides:", error);
@@ -93,13 +126,26 @@ export async function PUT(request, { params }) {
     const { id } = await params;
     const canonical = resolveProviderAlias(id);
     const body = await request.json().catch(() => ({}));
+    if (canonical === "opencode" && containsHeader(body.headers, "x-opencode-session")) {
+      return NextResponse.json({ error: "x-opencode-session is generated automatically for OpenCode Free and cannot be overridden." }, { status: 400 });
+    }
     const { override, error } = normalizeOverride(body);
     if (error) {
       return NextResponse.json({ error }, { status: 400 });
     }
     const current = await readOverrides();
     const next = { ...current };
-    if (override) next[canonical] = override;
+    if (override) {
+      if (canonical === "opencode") {
+        const headers = { ...(override.headers || {}) };
+        for (const name of Object.keys(headers)) {
+          if (name.toLowerCase() === "x-opencode-session") delete headers[name];
+        }
+        override.headers = headers;
+        if (Object.keys(headers).length === 0) delete override.headers;
+      }
+      next[canonical] = override;
+    }
     else delete next[canonical];
     await updateSettings({ providerOverrides: next });
     return NextResponse.json({ headers: override?.headers || {} });

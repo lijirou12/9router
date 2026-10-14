@@ -16,6 +16,7 @@ import {
   generateRequestId,
   translateSessionId,
   stableSessionId,
+  getLatestGeneratedSession,
   deriveRequestId,
 } from "../../open-sse/executors/opencode.js";
 
@@ -158,6 +159,13 @@ describe("OpenCode Free Executor Session Resolution", () => {
     expect(sent.tools.map((tool) => tool.name)).toEqual(["bash", "read"]);
     expect(sent.tool_choice).toBe("auto");
     expect(credentials).not.toHaveProperty("_opencodeSession");
+  });
+
+  it("exposes the latest session selected by the OpenCode executor", () => {
+    const credentials = makeCredentials({ connectionId: "latest-session-test" });
+    const sessionId = stableSessionId(credentials);
+    expect(getLatestGeneratedSession()).toBe(sessionId);
+    expect(getLatestGeneratedSession()).toMatch(OPENCODE_SESSION_RE);
   });
 
   it("falls back to a valid generated session in buildHeaders when called standalone", () => {

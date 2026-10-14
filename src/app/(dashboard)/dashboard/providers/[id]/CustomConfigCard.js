@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import PropTypes from "prop-types";
 import { Card, Badge } from "@/shared/components";
 import { useNotificationStore } from "@/store/notificationStore";
@@ -14,25 +14,29 @@ export default function CustomConfigCard({ providerId }) {
   const [expanded, setExpanded] = useState(false);
   const [rows, setRows] = useState([{ name: "", value: "" }]);
   const [builtin, setBuiltin] = useState({});
+  const [dynamicHeaders, setDynamicHeaders] = useState({});
   const [hasOverride, setHasOverride] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    fetch(`/api/providers/${providerId}/overrides`, { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (cancelled || !data) return;
-        // Effective set = registry built-ins with user overrides layered on top
-        const builtinHeaders = data.builtinHeaders || {};
-        const effective = { ...builtinHeaders, ...(data.headers || {}) };
-        const headerRows = Object.entries(effective).map(([name, value]) => ({ name, value }));
-        setBuiltin(builtinHeaders);
-        setRows(headerRows.length ? headerRows : [{ name: "", value: "" }]);
-        setHasOverride(Object.keys(data.headers || {}).length > 0);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
+  const loadHeaders = useCallback(async () => {
+    const res = await fetch(`/api/providers/${providerId}/overrides`, { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const builtinHeaders = data.builtinHeaders || {};
+    const effective = { ...builtinHeaders, ...(data.headers || {}) };
+    const dynamic = data.dynamicHeaders || {};
+    setDynamicHeaders(dynamic);
+    for (const name of Object.keys(dynamic)) {
+      for (const key of Object.keys(effective)) {
+        if (key.toLowerCase() === name.toLowerCase()) delete effective[key];
+      }
+    }
+    const headerRows = Object.entries(effective).map(([name, value]) => ({ name, value }));
+    setBuiltin(builtinHeaders);
+    setRows(headerRows.length ? headerRows : [{ name: "", value: "" }]);
+    setHasOverride(Object.keys(data.headers || {}).length > 0);
+    setLoaded(true);
   }, [providerId]);
 
   const setRow = (i, field, value) => {
@@ -83,14 +87,14 @@ export default function CustomConfigCard({ providerId }) {
     setRows(Object.entries(builtin).map(([name, value]) => ({ name, value })));
   };
 
-  // Only render when there is something to customize: registry headers or existing overrides
-  if (Object.keys(builtin).length === 0 && !hasOverride) return null;
-
   return (
     <Card padding="xs">
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={() => {
+          setExpanded((v) => !v);
+          if (!loaded) loadHeaders().catch(() => {});
+        }}
         className="flex w-full items-center justify-between text-left"
       >
         <div className="flex items-center gap-2">
@@ -108,6 +112,32 @@ export default function CustomConfigCard({ providerId }) {
       {expanded && (
         <div className="mt-3 border-t border-border pt-3">
           <div className="flex flex-col gap-2">
+            {!loaded && <span className="text-xs text-text-muted">Loading headers…</span>}
+            {Object.entries(dynamicHeaders).map(([name, dynamic]) => (
+              <div key={`dynamic-${name}`} className="flex items-center gap-2">
+                <input
+                  value={name}
+                  readOnly
+                  aria-label={`${name} header name`}
+                  className="w-44 rounded-md border border-border bg-background px-2 py-1.5 text-sm opacity-80"
+                />
+                <input
+                  value={dynamic?.value || "Waiting for first OpenCode Free request"}
+                  readOnly
+                  aria-label={`${name} automatically generated value`}
+                  title={dynamic?.description || "Generated automatically"}
+                  className="min-w-0 flex-1 rounded-md border border-dashed border-primary/50 bg-background px-2 py-1.5 text-sm text-text-muted"
+                />
+                <button
+                  type="button"
+                  title="Refresh generated session value"
+                  onClick={() => loadHeaders().catch(() => {})}
+                  className="shrink-0 rounded-md border border-border px-2 py-1.5 text-xs hover:bg-black/[0.03] dark:hover:bg-white/[0.03]"
+                >
+                  Refresh
+                </button>
+              </div>
+            ))}
             {rows.map((row, i) => {
               const overridden = row.name.trim() in builtin && row.value !== builtin[row.name.trim()];
               return (

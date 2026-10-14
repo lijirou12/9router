@@ -121,6 +121,7 @@ function nativeSession(headers) {
 // after MEMORY_CONFIG.sessionTtlMs like the other session stores.
 const stableOpencodeSessions = new Map();
 const MAX_STABLE_SESSIONS = 1000;
+let latestGeneratedSession = null;
 const stableSessionCleanup = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of stableOpencodeSessions) {
@@ -157,7 +158,12 @@ export function stableSessionId(credentials) {
     stableOpencodeSessions.delete(stableOpencodeSessions.keys().next().value);
   }
   stableOpencodeSessions.set(key, { sessionId, lastUsed: Date.now() });
+  latestGeneratedSession = { sessionId, lastUsed: Date.now() };
   return sessionId;
+}
+
+export function getLatestGeneratedSession() {
+  return latestGeneratedSession?.sessionId || null;
 }
 
 function lastUserText(body) {
@@ -264,7 +270,10 @@ function isMessagesModel(model) {
 function resolveOpencodeSession(body, credentials, providerSessionId, clientTool) {
   const headers = credentials?.rawHeaders || {};
   const native = nativeSession(headers);
-  if (native) return native;
+  if (native) {
+    latestGeneratedSession = { sessionId: native, lastUsed: Date.now() };
+    return native;
+  }
 
   let incoming = null;
   for (const [key, value] of Object.entries(headers)) {
@@ -275,7 +284,11 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
   }
 
   const hinted = incoming || normalizeSession(providerSessionId);
-  if (hinted) return translateSessionId(hinted, clientTool);
+  if (hinted) {
+    const sessionId = translateSessionId(hinted, clientTool);
+    latestGeneratedSession = { sessionId, lastUsed: Date.now() };
+    return sessionId;
+  }
 
   if (credentials?.connectionId || bodyHasSessionHints(body)) {
     let viaManager = null;
@@ -289,7 +302,11 @@ function resolveOpencodeSession(body, credentials, providerSessionId, clientTool
     } catch {
       viaManager = null;
     }
-    if (viaManager) return translateSessionId(viaManager, clientTool);
+    if (viaManager) {
+      const sessionId = translateSessionId(viaManager, clientTool);
+      latestGeneratedSession = { sessionId, lastUsed: Date.now() };
+      return sessionId;
+    }
   }
 
   return stableSessionId(credentials);
@@ -445,6 +462,15 @@ export class OpenCodeExecutor extends BaseExecutor {
       applyFingerprintTools(body, false);
     }
     return injectReasoningContent({ provider: this.provider, model, body });
+  }
+
+  finalizeRequestHeaders(headers, credentials) {
+    // This value is algorithmically generated and stable for the downstream
+    // identity. Never let a static user header replace it.
+    for (const name of Object.keys(headers)) {
+      if (name.toLowerCase() === SESSION_HEADER) delete headers[name];
+    }
+    headers[SESSION_HEADER] = credentials?.[SESSION_FIELD] || this.prepareRequestCredentials({ credentials })[SESSION_FIELD];
   }
 
   async execute(args) {
