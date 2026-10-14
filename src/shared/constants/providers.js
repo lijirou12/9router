@@ -152,7 +152,7 @@ export function getProvidersByKind(kind) {
     .filter((p) => {
       const kinds = p.serviceKinds ?? ["llm"];
       if (!kinds.includes(kind)) return false;
-      if (p.hidden || p.disabled) return false;
+      if (p.hidden || (p.disabled && p.id === "opencode")) return false;
       if (p.hiddenKinds?.includes(kind)) return false;
       return true;
     })

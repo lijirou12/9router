@@ -63,7 +63,7 @@ export async function GET() {
 
     // Hide internal/disabled providers and enrich compatible display names.
     const safeConnections = connections.map(c => {
-      if (AI_PROVIDERS[c.provider]?.hidden || AI_PROVIDERS[c.provider]?.disabled) return null;
+      if (AI_PROVIDERS[c.provider]?.hidden || (AI_PROVIDERS[c.provider]?.disabled && c.provider === "opencode")) return null;
       const isCompatible = isOpenAICompatibleProvider(c.provider) || isAnthropicCompatibleProvider(c.provider);
       const name = isCompatible
         ? (c.name || nodeNameMap[c.provider] || c.providerSpecificData?.nodeName || c.provider)
@@ -98,7 +98,7 @@ export async function POST(request) {
     }
     const proxyPoolId = proxyPoolResult.proxyPoolId;
 
-    if (AI_PROVIDERS[provider]?.disabled) {
+    if (AI_PROVIDERS[provider]?.disabled && provider === "opencode") {
       return NextResponse.json({
         error: `${AI_PROVIDERS[provider].name || provider} is disabled because its upstream free inference endpoint rejects third-party clients.`,
       }, { status: 410 });
