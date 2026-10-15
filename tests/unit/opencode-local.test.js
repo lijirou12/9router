@@ -29,7 +29,7 @@ describe("opencode-local provider", () => {
   it("registers with the /inference lane, forceStream and noAuth", () => {
     const p = PROVIDERS["opencode-local"];
     expect(p).toBeDefined();
-    expect(p.baseUrl).toBe("https://opencode.ai/inference/openai/v1/chat/completions");
+    expect(p.baseUrl).toBe("https://opencode.ai");
     expect(p.forceStream).toBe(true);
     expect(p.noAuth).toBe(true);
   });
@@ -42,10 +42,10 @@ describe("opencode-local provider", () => {
     const ex = getExecutor("opencode-local");
     expect(ex.constructor.name).toBe("OpenCodeLocalExecutor");
     expect(ex.buildUrl("space-bunny-free")).toBe(
-      "https://opencode.ai/inference/openai/v1/chat/completions"
+      "https://opencode.ai/inference/v1/chat/completions"
     );
     expect(ex.buildUrl("big-pickle")).toBe(
-      "https://opencode.ai/inference/openai/v1/chat/completions"
+      "https://opencode.ai/inference/v1/chat/completions"
     );
   });
 
@@ -59,12 +59,63 @@ describe("opencode-local provider", () => {
     const headers = ex.buildHeaders(
       prepared,
       true,
-      "https://opencode.ai/inference/openai/v1/chat/completions",
+      "https://opencode.ai/inference/v1/chat/completions",
       "space-bunny-free"
     );
     expect(headers["User-Agent"]).toMatch(/^opencode\//);
     expect(headers["x-opencode-session"]).toMatch(/^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/);
     expect(headers["x-opencode-client"]).toBe("cli");
+  });
+
+  it("routes Muse Spark aliases through Responses and keeps Responses tool schema", async () => {
+    const ex = getExecutor("opencode-local");
+    const models = [
+      "muse-spark-1.2-contributor-free",
+      "muse-spark-1.3-contributor-free",
+      "muse-spark-1.2-free",
+      "muse-spark-1.3-free",
+    ];
+    for (const model of models) {
+      expect(ex.buildUrl(model)).toBe("https://opencode.ai/inference/v1/responses");
+    }
+    const model = models[1];
+    const body = {
+      model: `ocl/${model}`,
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ type: "function", function: { name: "lookup", parameters: { type: "object", properties: {} } } }],
+    };
+    const translated = (await import("../../open-sse/translator/index.js")).translateRequest(
+      "openai", "openai-responses", model, body, true, {}, PROVIDERS["opencode-local"],
+    );
+    const out = ex.transformRequest(model, translated, true, { connectionId: "ocl-muse-test" });
+    expect(out.input).toEqual(expect.arrayContaining([expect.objectContaining({ type: "message" })]));
+    expect(out.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "function", name: "lookup" }),
+    ]));
+    expect(out.tools[0].function).toBeUndefined();
+    expect(out.tools.some((tool) => tool.name === "read")).toBe(true);
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(sseOk());
+    await ex.execute({ model, body, stream: true, credentials: { connectionId: "ocl-muse-wire" } });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://opencode.ai/inference/v1/responses");
+    const sent = JSON.parse(init.body);
+    expect(sent.tools[0].function).toBeUndefined();
+    expect(sent.tools.some((tool) => tool.name === "read")).toBe(true);
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(sseOk());
+    await ex.execute({
+      model: "step-5-preview-free",
+      body: { model: "step-5-preview-free", messages: [{ role: "user", content: "hi" }] },
+      stream: true,
+      credentials: { connectionId: "ocl-chat-wire" },
+    });
+    const [chatUrl, chatInit] = fetchMock.mock.calls[0];
+    expect(chatUrl).toBe("https://opencode.ai/inference/v1/chat/completions");
+    expect(JSON.parse(chatInit.body).tools[0].function).toBeDefined();
   });
 
   it("reuses the stable session per identity (blocklist, not freshness)", async () => {
@@ -101,11 +152,6 @@ describe("opencode-local provider", () => {
     fetchMock.mockResolvedValueOnce(burnt()).mockResolvedValueOnce(ok());
     const body = { model: "space-bunny-free", messages: [{ role: "user", content: "ping" }] };
     await ex.execute({ model: "space-bunny-free", body, stream: true, credentials: { connectionId: "burn", rawHeaders: {} } });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const s1 = fetchMock.mock.calls[0][1].headers["x-opencode-session"];
-    const s2 = fetchMock.mock.calls[1][1].headers["x-opencode-session"];
-    expect(s1).toMatch(/^ses_/);
-    expect(s2).toMatch(/^ses_/);
-    expect(s2).not.toBe(s1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

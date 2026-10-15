@@ -16,19 +16,26 @@ export default {
   category: "free",
   noAuth: true,
   transport: {
-    baseUrl: "https://opencode.ai/inference/openai/v1/chat/completions",
+    baseUrl: "https://opencode.ai",
     headers: {
-      "x-opencode-client": "desktop",
+      "x-opencode-client": "cli",
     },
     forceStream: true,
     noAuth: true,
+    quirks: {
+      forceAutoToolChoiceModels: ["muse-spark-1.3-contributor-free"],
+    },
   },
-  // Endpoint verified live: UA opencode/* + x-opencode-session + tool fingerprint
-  // + stream:true on /inference returns 200 where /zen 403s on the same combo.
   transports: [
-    { format: "openai", baseUrl: "https://opencode.ai/inference/openai/v1/chat/completions", auth: { combined: true, header: "Authorization", scheme: "bearer" } },
+    { format: "openai", baseUrl: "https://opencode.ai/inference/v1/chat/completions", auth: { combined: true, header: "Authorization", scheme: "bearer" } },
+    { format: "openai-responses", baseUrl: "https://opencode.ai/inference/v1/responses", auth: { combined: true, header: "Authorization", scheme: "bearer" } },
   ],
   models: [
+    // Muse Spark models require OpenAI Responses protocol on the v2 inference lane.
+    { id: "muse-spark-1.2-contributor-free", name: "Muse Spark 1.2 Contributor Free", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "muse-spark-1.3-contributor-free", name: "Muse Spark 1.3 Contributor Free", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "muse-spark-1.2-free", name: "Muse Spark 1.2 Free", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
+    { id: "muse-spark-1.3-free", name: "Muse Spark 1.3 Free", targetFormat: "openai-responses", supportedFormats: ["openai-responses"] },
     { id: "space-bunny-free", name: "Space Bunny Free", supportedFormats: ["openai"] },
     { id: "big-pickle", name: "Big Pickle", supportedFormats: ["openai"] },
     { id: "deepseek-v4-flash-free", name: "DeepSeek V4 Flash Free", supportedFormats: ["openai"] },

@@ -33,20 +33,20 @@ describe("opencode-local end-to-end request shape", () => {
     const outBody = ex.transformRequest("space-bunny-free", { ...body }, true, prepared);
     const headers = ex.buildHeaders(prepared, true, url, "space-bunny-free", outBody);
 
-    expect(url).toBe("https://opencode.ai/inference/openai/v1/chat/completions");
+    expect(url).toBe("https://opencode.ai/inference/v1/chat/completions");
     expect(outBody.stream).toBe(true);
     const names = (outBody.tools || []).map((t) => t.function?.name || t.name);
-    for (const n of ["bash", "glob", "grep", "read"]) expect(names).toContain(n);
+    for (const n of ["read", "shell"]) expect(names).toContain(n);
     expect(headers["User-Agent"]).toMatch(/^opencode\//);
     expect(headers["x-opencode-session"]).toMatch(/^ses_/);
 
     await ex.execute({ model: "space-bunny-free", body, stream: true, credentials });
     expect(fetchMock).toHaveBeenCalledOnce();
     const [calledUrl, opts] = fetchMock.mock.calls[0];
-    expect(calledUrl).toBe("https://opencode.ai/inference/openai/v1/chat/completions");
+    expect(calledUrl).toBe("https://opencode.ai/inference/v1/chat/completions");
     const sent = JSON.parse(opts.body);
     expect(sent.stream).toBe(true);
-    expect(sent.tools.length).toBeGreaterThanOrEqual(4);
+    expect(sent.tools.map((tool) => tool.function?.name || tool.name)).toEqual(expect.arrayContaining(["read", "shell"]));
     expect(opts.headers["x-opencode-session"]).toMatch(/^ses_/);
   });
 });

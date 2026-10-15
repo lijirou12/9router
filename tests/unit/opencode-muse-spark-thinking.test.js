@@ -214,9 +214,8 @@ describe("OpenCode Free Muse Spark thinking", () => {
     // User message, function_call, function_call_output, and next user message survive
     const types = out.input.map((item) => item.type);
     expect(types).toEqual(["message", "function_call", "function_call_output", "message"]);
-    // Tools flattened and empty properties added. The caller's own `shell` clashes
-    // with OpenCode's fingerprint tool, so it (and its prior call) travel under an
-    // alias while the exact read/shell definitions are appended.
+    // The caller's `shell` clashes with the exact OpenCode fingerprint tool, so it
+    // travels under an alias while the canonical read/shell definitions are appended.
     expect(out.tools.slice(0, 1)).toEqual([
       {
         type: "function",
